@@ -6,7 +6,7 @@ from cognite.client import CogniteClient
 from cognite.client.data_classes import ExtractionPipelineRun
 from cognite.client.data_classes.data_modeling import NodeId, ViewId
 from cognite.client.data_classes.data_modeling.cdm.v1 import CogniteAsset, CogniteTimeSeries
-from cognite.client.data_classes.filters import Prefix, ContainsAny
+from cognite.client.data_classes.filters import In, ContainsAny
 
 from ice_cream_factory_api import IceCreamFactoryAPI
 
@@ -36,16 +36,24 @@ def get_time_series_for_site(client: CogniteClient, site):
         )
         return []
 
-    sub_tree_nodes = client.data_modeling.instances.list(
-        instance_type=CogniteAsset,
-        filter=Prefix(property=["cdf_cdm", "CogniteAsset/v1", "path"], value=sub_tree_root.path),
-        limit=None
-    )
+    sub_tree_nodes = [sub_tree_root]
+    parent_ids = [{"space": sub_tree_root.space, "externalId": sub_tree_root.external_id}]
 
-    if not sub_tree_nodes:
+    while parent_ids:
+        child_nodes = []
+        for parent_batch in batcher(parent_ids, 100):
+            child_nodes.extend(client.data_modeling.instances.list(
+                instance_type=CogniteAsset,
+                filter=In(property=["cdf_cdm", "CogniteAsset/v1", "parent"], values=parent_batch),
+                limit=None
+            ))
+        sub_tree_nodes.extend(child_nodes)
+        parent_ids = [{"space": node.space, "externalId": node.external_id} for node in child_nodes]
+
+    if len(sub_tree_nodes) == 1:
         print(
-            f"----No CogniteTimeSeries in CDF for {site}!----\n"
-            f"    Run the 'Contextualize Timeseries and Assets' transformation!"
+            f"----No child CogniteAssets in CDF for {site}!----\n"
+            f"    Run the 'Create Cognite Asset Hierarchy' transformation!"
         )
         return []
 
@@ -165,4 +173,5 @@ def handle(client: CogniteClient = None, data=None):
 
         report_ext_pipe(client, "success")
     except Exception as e:
-        report_ext_pipe(client, "fail", e)
+        report_ext_pipe(client, "fail", str(e))
+        raise
